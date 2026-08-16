@@ -16,6 +16,10 @@ on:
         description: "Solo enseñar qué se publicaría"
         type: boolean
         default: false
+      verificar:
+        description: "Solo comprobar que las credenciales llegan a la API"
+        type: boolean
+        default: false
 
 concurrency:
   group: publicar-instagram
@@ -44,10 +48,11 @@ jobs:
           TZ_LOCAL: Europe/Madrid
         run: |
           python3 scripts/publish.py \
-            ${{ inputs.dry_run && '--dry-run' || '' }}
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.verificar && '--verificar' || '' }}
 
       - name: Guardar el estado de la cola
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && !inputs.verificar }}
         run: |
           if git diff --quiet -- cola.csv; then
             echo "Sin cambios en la cola."

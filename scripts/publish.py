@@ -29,7 +29,20 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true",
                    help="enseña qué publicaría sin llamar a la API")
     p.add_argument("--solo", help="publica esa entrada por id, ignorando la fecha")
+    p.add_argument("--verificar", action="store_true",
+                   help="comprueba las credenciales contra la API y sale")
     args = p.parse_args()
+
+    # Sin esto, una pasada sin nada que publicar sale verde aunque el token
+    # esté mal: se vuelve antes de tocar la API y el fallo aparece el día
+    # que sí toca publicar.
+    if args.verificar:
+        ig = api.desde_entorno()
+        cuenta = ig._llamar("GET", ig.ig_user_id, fields="username")
+        usadas, total = ig.cuota()
+        print(f"Credenciales correctas: @{cuenta.get('username')}")
+        print(f"Permiso de publicación: {usadas}/{total} en 24 h")
+        return
 
     entradas = q.leer()
     if not entradas:
