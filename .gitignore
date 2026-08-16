@@ -1,0 +1,11 @@
+# Credenciales
+.env
+
+# Los medios originales y los normalizados no van al repo: viven en R2.
+posts/
+.medios/
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
