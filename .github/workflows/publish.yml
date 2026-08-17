@@ -21,7 +21,14 @@ on:
     # GitHub redondea cada ejecución a un minuto entero y el plan gratis de un
     # repo privado son 2.000 al mes (~66 al día): con 24 hay sitio de sobra
     # aunque algún run se pase del minuto.
-    - cron: "*/15 9,10,14,15,19,20 * * *"
+    #
+    # Los minutos son :05 :20 :35 :50 y NO el minuto en punto, a propósito.
+    # Los workflows programados son best-effort: van con la prioridad más baja
+    # y el atasco gordo es a las en punto, que es cuando dispara el cron de
+    # medio mundo. Con */15 el 16 de agosto se lanzaron 6 de 12 disparos y
+    # ninguno cayó en su minuto (18:49, 19:20, 19:44, 19:58, 20:32, 20:58 UTC).
+    # Pedir turno cinco minutos después del pico se salta esa cola.
+    - cron: "5,20,35,50 9,10,14,15,19,20 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
