@@ -1,0 +1,12 @@
+{
+  "divifriends": {
+    "nombre": "DiviFriends",
+    "usuario": "divifriends.es",
+    "ig_user_id": "17841440305196625",
+    "color": "#F5A623",
+    "skill_post": "divifriends-post",
+    "skill_anim": "divifriends-anim",
+    "franjas": ["11:00", "16:00", "21:00"],
+    "proyecto": "~/Desktop/Divi"
+  }
+}

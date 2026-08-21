@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Panel de publicación</title>
+  <link rel="stylesheet" href="/estatico/estilo.css">
+</head>
+<body>
+  <header>
+    <div class="marca-titulo"><b>PANEL</b> DE PUBLICACIÓN <span id="reloj"></span></div>
+
+    <div class="mes">
+      <button class="icono" id="mes-atras">‹</button>
+      <strong id="mes-nombre" class="mono"></strong>
+      <button class="icono" id="mes-alante">›</button>
+      <button class="icono" id="mes-hoy" title="Volver a hoy">⌖</button>
+    </div>
+
+    <div class="crece"></div>
+
+    <div class="instrumentos">
+      <div class="instrumento"><span class="et">Canales</span><span class="cifra" id="i-canales">0</span></div>
+      <div class="instrumento"><span class="et">En cola</span><span class="cifra" id="i-cola">0</span></div>
+      <div class="instrumento"><span class="et">Borradores</span><span class="cifra" id="i-borradores">0</span></div>
+      <div class="instrumento"><span class="et">Generando</span><span class="cifra" id="i-generando">0</span></div>
+    </div>
+
+    <div class="enlace" id="enlace"></div>
+  </header>
+
+  <main id="marco">
+    <aside>
+      <div class="rotulo"><span class="indice">01</span> Canales</div>
+      <div id="lista-canales"></div>
+
+      <div class="rotulo"><span class="indice">02</span> En producción</div>
+      <div id="lista-trabajos"><div class="vacio">SIN ENCARGOS ACTIVOS</div></div>
+
+      <div class="rotulo"><span class="indice">03</span> Pendiente de visto bueno</div>
+      <div id="lista-piezas"><div class="vacio">SIN BORRADORES</div></div>
+    </aside>
+
+    <section class="tablero">
+      <div class="cabecera-dias">
+        <div>lun</div><div>mar</div><div>mié</div><div>jue</div>
+        <div>vie</div><div>sáb</div><div>dom</div>
+      </div>
+      <div class="rejilla" id="rejilla"></div>
+    </section>
+
+    <section class="detalle" id="detalle"></section>
+  </main>
+
+  <div class="telon oculto" id="telon">
+    <div class="consola-modal" id="cuerpo-modal"></div>
+  </div>
+
+  <script src="/estatico/app.js"></script>
+</body>
+</html>

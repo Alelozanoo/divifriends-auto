@@ -1,0 +1,4 @@
+# Solo para el panel local. El publicador de GitHub Actions no las necesita.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pillow>=10

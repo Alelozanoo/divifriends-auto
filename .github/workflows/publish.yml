@@ -2,33 +2,23 @@ name: Publicar en Instagram
 
 on:
   schedule:
-    # Cada 15 min, pero solo en las franjas en las que publicamos. El cron va
-    # en UTC y Madrid cambia de hora, así que cada franja necesita DOS horas:
+    # Dos despertares por hora, de 06 a 21 UTC —de 08:00 a 23:00 en Madrid, y
+    # con el cambio de hora sigue cubriendo la franja útil—. Antes eran seis
+    # horas sueltas calculadas a mano para las tres franjas de DiviFriends;
+    # con varias cuentas, cada una con sus horas en cuentas.json, esa lista
+    # había que rehacerla cada vez que entraba una marca, y olvidarla
+    # significaba que esa cuenta no publicaba nunca.
     #
-    #   franja   verano (+2)   invierno (+1)
-    #   11:00      09 UTC         10 UTC
-    #   16:00      14 UTC         15 UTC
-    #   21:00      19 UTC         20 UTC
+    # publish.py solo saca lo que ya ha vencido, así que despertar de más no
+    # publica nada antes de tiempo: solo cuesta un minuto de Actions. Son 32
+    # ejecuciones al día sobre las ~66 que da el plan gratuito de un repo
+    # privado, con sitio de sobra.
     #
-    # La segunda hora de cada par hace doble papel: en verano es el margen por
-    # si GitHub retrasa el disparo, y en invierno es la hora buena. No quitar
-    # ninguna de las seis pensando que sobra.
-    #
-    # La hora ANTERIOR a cada franja sí sobraba y se ha quitado: publish.py
-    # solo publica lo que ya ha vencido, así que despertarse antes no hacía
-    # nada. Eso baja de 36 a 24 despertares al día.
-    #
-    # GitHub redondea cada ejecución a un minuto entero y el plan gratis de un
-    # repo privado son 2.000 al mes (~66 al día): con 24 hay sitio de sobra
-    # aunque algún run se pase del minuto.
-    #
-    # Los minutos son :05 :20 :35 :50 y NO el minuto en punto, a propósito.
-    # Los workflows programados son best-effort: van con la prioridad más baja
-    # y el atasco gordo es a las en punto, que es cuando dispara el cron de
-    # medio mundo. Con */15 el 16 de agosto se lanzaron 6 de 12 disparos y
-    # ninguno cayó en su minuto (18:49, 19:20, 19:44, 19:58, 20:32, 20:58 UTC).
-    # Pedir turno cinco minutos después del pico se salta esa cola.
-    - cron: "5,20,35,50 9,10,14,15,19,20 * * *"
+    # Los minutos son :07 y :37, no el minuto en punto, a propósito. Los
+    # workflows programados van con la prioridad más baja y el atasco gordo es
+    # a las en punto, que es cuando dispara el cron de medio mundo. Pedir turno
+    # unos minutos después del pico se salta esa cola.
+    - cron: "7,37 6-21 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -62,7 +52,12 @@ jobs:
 
       - name: Publicar lo que toque
         env:
-          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          # Qué cuenta es cada cosa está en cuentas.json, que va en el repo:
+          # los ids de Instagram son públicos. Aquí solo viaja el secreto.
+          #
+          # Un mismo token de usuario del sistema vale para todas las cuentas
+          # cuyos activos tenga asignados. Una cuenta de cliente con token
+          # propio se añade aquí como IG_ACCESS_TOKEN_<SLUG en mayúsculas>.
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           TZ_LOCAL: Europe/Madrid
         run: |

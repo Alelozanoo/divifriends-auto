@@ -173,6 +173,19 @@ def publicar(ig: Instagram, tipo: str, urls: list[str], caption: str) -> str:
     raise IGError(f"tipo desconocido: {tipo}")
 
 
+def para(slug: str) -> Instagram:
+    """El cliente de una cuenta del registro."""
+    import cuentas as reg
+
+    cuenta = reg.una(slug)
+    if not cuenta.token:
+        raise SystemExit(
+            f"Falta el token de «{slug}»: define IG_ACCESS_TOKEN "
+            f"(o IG_ACCESS_TOKEN_{slug.upper().replace('-', '_')} si tiene el suyo)"
+        )
+    return Instagram(cuenta.ig_user_id, cuenta.token)
+
+
 def desde_entorno() -> Instagram:
     faltan = [v for v in ("IG_USER_ID", "IG_ACCESS_TOKEN") if not os.environ.get(v)]
     if faltan:

@@ -7,8 +7,21 @@ Cloudflare R2 y los escribe en `cola.csv` con su fecha. Un cron en GitHub
 Actions se despierta cada 15 minutos, mira la cola y publica lo que toca.
 
 ```
-posts/  →  prepare.py  →  R2 + cola.csv  →  [git push]  →  Actions  →  Instagram
-   (en tu Mac)                                            (cada 15 min)
+posts/  →  prepare.py  →  bucket + cola.csv  →  [git push]  →  Actions  →  Instagram
+   (en tu Mac)                                                (2 veces por hora)
+```
+
+Publica en **varias cuentas**: cada fila de la cola lleva la suya y el registro
+de marcas está en [`cuentas.json`](cuentas.json). Un mismo token de usuario del
+sistema vale para todas las cuentas cuyos activos tenga asignados; lo único que
+cambia entre marcas es el id de Instagram.
+
+Y hay un **panel local** para verlo y manejarlo todo desde un sitio —qué sale
+cada día en cada cuenta, generar piezas nuevas con Claude, aprobarlas y
+programarlas—: ver [`dashboard/`](dashboard/README.md).
+
+```bash
+./ver-calendario
 ```
 
 La API de Instagram **no tiene programación nativa** —el `scheduled_publish_time`
@@ -29,6 +42,14 @@ por eso hace falta R2.
 **Deja la app en modo desarrollo.** Mientras tú tengas rol de administrador,
 puedes publicar en tus propias cuentas sin pasar App Review. La revisión solo
 hace falta para publicar en cuentas de terceros.
+
+Para **añadir una cuenta tuya** basta con meter su Página y su cuenta de
+Instagram en el portafolio y asignárselas al mismo usuario del sistema —junto
+con la app, que es lo que todo el mundo olvida—, y añadirla a `cuentas.json`.
+No hace falta token nuevo. Para la **cuenta de un cliente**, su Business
+Manager tiene que darte acceso de socio a esos dos activos, y ahí sí entra en
+juego App Review: publicar en activos de terceros exige la app en modo Live con
+`instagram_content_publish` aprobado.
 
 ## 2. El token
 
@@ -120,6 +141,10 @@ El nombre del archivo (o de la carpeta) es el **id** de la entrada. Renombrar
 algo ya publicado hace que se vuelva a publicar, así que no los toques después.
 
 ## 6. Programar
+
+Todos los comandos aceptan `--cuenta <slug>`; sin él van a la cuenta por
+defecto de `cuentas.json`.
+
 
 ```bash
 .venv/bin/python scripts/prepare.py --slots "lun 09:30, mie 09:30, vie 19:00" --dry-run

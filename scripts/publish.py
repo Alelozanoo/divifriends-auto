@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import entorno  # noqa: E402,F401  (carga el .env)
 import cola as q  # noqa: E402
+import cuentas as reg  # noqa: E402
 import ig as api  # noqa: E402
 
 # Si un post lleva más de esto sin salir, no se publica solo: algo se rompió
@@ -37,11 +38,21 @@ def main() -> None:
     # esté mal: se vuelve antes de tocar la API y el fallo aparece el día
     # que sí toca publicar.
     if args.verificar:
-        ig = api.desde_entorno()
-        cuenta = ig._llamar("GET", ig.ig_user_id, fields="username")
-        usadas, total = ig.cuota()
-        print(f"Credenciales correctas: @{cuenta.get('username')}")
-        print(f"Permiso de publicación: {usadas}/{total} en 24 h")
+        # Una cuenta rota no debe tapar a las demás: se prueban todas y el
+        # script sale en rojo solo si alguna falla.
+        fallos = 0
+        for slug in sorted(reg.todas()):
+            try:
+                ig = api.para(slug)
+                perfil = ig._llamar("GET", ig.ig_user_id, fields="username")
+                usadas, total = ig.cuota()
+                print(f"  ✓ {slug:<14} @{perfil.get('username')}  "
+                      f"cuota {usadas}/{total} en 24 h")
+            except (api.IGError, SystemExit) as err:
+                fallos += 1
+                print(f"  ✗ {slug:<14} {err}")
+        if fallos:
+            raise SystemExit(f"{fallos} cuenta/s con las credenciales rotas")
         return
 
     entradas = q.leer()
@@ -75,14 +86,33 @@ def main() -> None:
 
     if args.dry_run:
         for e in pendientes:
-            print(f"  {e.fecha}  {e.tipo:<8} {e.id}  ({len(e.urls)} medio/s)")
+            print(f"  {e.fecha}  {e.cuenta:<12} {e.tipo:<8} {e.id}  "
+                  f"({len(e.urls)} medio/s)")
             print(f"      {e.caption[:120]}")
         return
 
-    ig = api.desde_entorno()
-    usadas, limite = ig.cuota()
-    print(f"Cuota de Instagram: {usadas}/{limite} en las últimas 24 h")
+    # La cuota de publicación es por cuenta de Instagram, no de la app: cada
+    # una se pregunta y se lleva la suya, y agotar la de una marca no frena a
+    # las otras. Por eso se agrupa en vez de recorrer la cola en plano.
+    for slug in sorted({e.cuenta for e in pendientes}):
+        del_slug = [e for e in pendientes if e.cuenta == slug]
+        try:
+            ig = api.para(slug)
+            usadas, limite = ig.cuota()
+        except (api.IGError, SystemExit) as err:
+            for e in del_slug:
+                e.estado = q.ERROR
+                e.nota = f"cuenta {slug}: {str(err)[:250]}"
+            print(f"\n✗ {slug}: {err} — {len(del_slug)} entrada/s en error")
+            continue
 
+        print(f"\n=== {slug} — cuota {usadas}/{limite} en las últimas 24 h ===")
+        _publicar_lote(ig, del_slug, usadas, limite, ahora)
+
+    q.escribir(entradas)
+
+
+def _publicar_lote(ig, pendientes, usadas, limite, ahora) -> None:
     for e in pendientes:
         # Las stories no gastan la cuota del feed, así que siguen saliendo
         # aunque los posts se hayan quedado sin hueco.
@@ -102,8 +132,6 @@ def main() -> None:
             e.estado = q.ERROR
             e.nota = str(err)[:300]
             print(f"   ERROR: {e.nota}")
-
-    q.escribir(entradas)
 
 
 if __name__ == "__main__":

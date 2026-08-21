@@ -1,0 +1,5 @@
+#!/bin/sh
+# Arranca el dashboard y lo abre en el navegador.
+cd "$(dirname "$0")" || exit 1
+(sleep 1 && open http://127.0.0.1:8787) &
+exec ./.venv/bin/python dashboard/servidor.py

@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import entorno  # noqa: E402,F401  (carga el .env)
 import cola as q  # noqa: E402
+import cuentas as reg  # noqa: E402
 import almacen  # noqa: E402
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -313,7 +314,10 @@ def main() -> None:
     p.add_argument("--desde", help="primera fecha candidata (YYYY-MM-DD [HH:MM])")
     p.add_argument("--dry-run", action="store_true",
                    help="enseña lo que haría sin subir nada ni tocar la cola")
+    p.add_argument("--cuenta", default=reg.POR_DEFECTO,
+                   help="a qué cuenta van estos posts (ver cuentas.json)")
     args = p.parse_args()
+    cuenta = reg.una(args.cuenta)
 
     entradas = escanear()
     if not entradas:
@@ -322,7 +326,8 @@ def main() -> None:
     existentes = {e.id: e for e in q.leer()}
     nuevas = [e for e in entradas if e["id"] not in existentes]
 
-    print(f"{len(entradas)} entradas en posts/, {len(nuevas)} sin programar")
+    print(f"{len(entradas)} entradas en posts/, {len(nuevas)} sin programar "
+          f"→ {cuenta.nombre}")
     if not nuevas:
         return
 
@@ -348,12 +353,15 @@ def main() -> None:
         urls = []
         for archivo in entrada["archivos"]:
             listo = preparar_medio(archivo, entrada["tipo"], caja)
-            url = almacen.subir(listo)
+            # Cada marca en su carpeta del bucket: si algún día hay que
+            # llevarse una cuenta a otro sitio, se sabe qué es suyo.
+            url = almacen.subir(listo, prefijo=f"ig/{cuenta.slug}")
             print(f"    {archivo.name} → {url}")
             urls.append(url)
 
         existentes[entrada["id"]] = q.Entrada(
             id=entrada["id"],
+            cuenta=cuenta.slug,
             tipo=entrada["tipo"],
             fecha=cuando.strftime(q.FORMATO_FECHA),
             estado=q.PENDIENTE,
