@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Panel de publicación</title>
+  <link rel="icon" href="/estatico/icono.svg" type="image/svg+xml">
+  <link rel="alternate icon" href="/estatico/icono.png" sizes="180x180">
+  <link rel="apple-touch-icon" href="/estatico/icono.png">
   <link rel="stylesheet" href="/estatico/estilo.css">
 </head>
 <body>
@@ -15,6 +18,12 @@
       <strong id="mes-nombre" class="mono"></strong>
       <button class="icono" id="mes-alante">›</button>
       <button class="icono" id="mes-hoy" title="Volver a hoy">⌖</button>
+    </div>
+
+    <div class="vistas">
+      <button id="v-calendario" class="puesta">Calendario</button>
+      <button id="v-galeria">Galería <span class="cuantas" id="v-cuantas">0</span></button>
+      <button id="v-favoritos"><span class="corazoncito">♥</span> Favoritos <span class="cuantas" id="v-favoritas">0</span></button>
     </div>
 
     <div class="crece"></div>
@@ -41,12 +50,34 @@
       <div id="lista-piezas"><div class="vacio">SIN BORRADORES</div></div>
     </aside>
 
-    <section class="tablero">
+    <section class="tablero" id="tablero">
       <div class="cabecera-dias">
         <div>lun</div><div>mar</div><div>mié</div><div>jue</div>
         <div>vie</div><div>sáb</div><div>dom</div>
       </div>
       <div class="rejilla" id="rejilla"></div>
+    </section>
+
+    <section class="galeria oculto" id="galeria">
+      <div class="filtros">
+        <span class="et">Mostrar</span>
+        <div class="palanca" id="f-tipo">
+          <button data-tipo="todo" class="puesto">Todo</button>
+          <button data-tipo="foto">Imagen</button>
+          <button data-tipo="video">Vídeo</button>
+        </div>
+        <span class="et">Orden</span>
+        <div class="palanca" id="f-orden">
+          <button data-orden="recientes" class="puesto">Recientes</button>
+          <button data-orden="gusto">Más me gustan</button>
+        </div>
+        <div class="crece"></div>
+        <span class="et" id="f-cuenta-total"></span>
+        <div class="hojas" id="hojas"></div>
+      </div>
+      <div class="lienzo">
+        <div class="mosaico" id="mosaico"></div>
+      </div>
     </section>
 
     <section class="detalle" id="detalle"></section>

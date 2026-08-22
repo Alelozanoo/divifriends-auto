@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 from datetime import datetime, timedelta
@@ -29,7 +30,9 @@ import cuentas as reg  # noqa: E402
 import almacen  # noqa: E402
 import prepare  # noqa: E402
 
+import favoritos  # noqa: E402
 import generador  # noqa: E402
+import miniaturas  # noqa: E402
 import sincro  # noqa: E402
 
 from fastapi import Body, FastAPI, HTTPException  # noqa: E402
@@ -82,12 +85,15 @@ def _estado_completo() -> dict:
         "generando": [
             {"id": g.id, "cuenta": g.cuenta, "estado": g.estado, "modo": g.modo,
              "lineas": g.lineas[-14:], "error": g.error, "empezada": g.empezada,
-             "brief": g.brief, "rehace": g.rehace, "piezas": len(g.piezas)}
+             "brief": g.brief, "rehace": g.rehace, "piezas": len(g.piezas),
+             "progreso": g.progreso, "etiqueta": g.etiqueta}
             for g in generador.EN_CURSO.values()
         ],
         "git": {"conectado": est.conectado, "aviso": est.aviso,
                 "ultimo": est.ultimo, "sin_subir": est.pendiente_de_subir},
         "cli_claude": bool(generador.cli()),
+        "permisos": generador.PERMISOS,
+        "puede_ejecutar": generador.PERMISOS == "bypassPermissions",
         "ahora": datetime.now(q.zona()).strftime("%Y-%m-%d %H:%M"),
     }
 
@@ -103,7 +109,12 @@ async def eventos():
     async def flujo():
         visto = -1
         while True:
-            if _VERSION != visto:
+            # Con algo generando se manda estado cada segundo aunque no haya
+            # novedades: la barra avanza con el reloj dentro de cada fase, y si
+            # Claude se pasa un minuto pensando parecería colgada.
+            trabajando = any(g.estado == "trabajando"
+                             for g in generador.EN_CURSO.values())
+            if _VERSION != visto or trabajando:
                 visto = _VERSION
                 yield f"data: {json.dumps(_estado_completo(), ensure_ascii=False)}\n\n"
             await asyncio.sleep(1)
@@ -202,8 +213,16 @@ def programar(datos: dict = Body(...)) -> dict:
     caja = prepare.caja_carrusel(rutas) if tipo == "CAROUSEL" else None
     urls = []
     for ruta in rutas:
-        listo = prepare.preparar_medio(ruta, tipo, caja)
-        urls.append(almacen.subir(listo, prefijo=f"ig/{cuenta.slug}"))
+        try:
+            listo = prepare.preparar_medio(ruta, tipo, caja)
+        except Exception as err:
+            raise HTTPException(422, f"No pude preparar «{ruta.name}» para "
+                                     f"Instagram: {err}") from err
+        try:
+            urls.append(almacen.subir(listo, prefijo=f"ig/{cuenta.slug}"))
+        except Exception as err:
+            raise HTTPException(502, f"No pude subir «{ruta.name}» al bucket: "
+                                     f"{err}") from err
 
     base = pieza_id.split("/")[0].replace(f"{cuenta.slug}-", "")
     nuevo_id = f"{cuenta.slug}-{base}-{pieza_id.split('/')[-1]}"
@@ -225,10 +244,35 @@ def programar(datos: dict = Body(...)) -> dict:
 
 
 @app.delete("/api/borrador/{pieza_id:path}")
-def descartar_borrador(pieza_id: str) -> dict:
-    generador.descartar(pieza_id)
+def descartar_borrador(pieza_id: str, originales: bool = False) -> dict:
+    """Tira la pieza. Con `?originales=1` se lleva también lo que tenga fuera.
+
+    Lo de fuera va a la Papelera, no al vacío: la galería enlaza los originales
+    de Divi, y una carpeta de trabajo con su HTML y su voz no se destruye sin
+    red por un clic en un panel.
+    """
+    llevados = generador.descartar(pieza_id, con_original=originales)
     tocado()
-    return {"descartado": pieza_id}
+    return {"descartado": pieza_id, "papelera": llevados}
+
+
+@app.get("/api/rastro/{pieza_id:path}")
+def rastro(pieza_id: str) -> dict:
+    """Qué queda en el Mac detrás de esta pieza, para poder avisar antes."""
+    return {"rastro": generador.rastro_de(pieza_id)}
+
+
+# --- favoritos ----------------------------------------------------------
+
+@app.post("/api/favorito")
+def favorito(datos: dict = Body(...)) -> dict:
+    """Cuánto te gusta una pieza, de 1 a 5. Con 0 sale de favoritos."""
+    pieza_id = datos.get("pieza", "")
+    if generador.una_pieza(pieza_id) is None:
+        raise HTTPException(404, f"No encuentro el borrador «{pieza_id}»")
+    nivel = favoritos.poner(pieza_id, datos.get("nivel", 0))
+    tocado()
+    return {"pieza": pieza_id, "nivel": nivel}
 
 
 # --- generación ---------------------------------------------------------
@@ -291,10 +335,33 @@ def hueco(datos: dict = Body(...)) -> dict:
 
 # --- estáticos y medios -------------------------------------------------
 
+@app.get("/mini/{ruta:path}")
+def miniatura(ruta: str):
+    """La versión pequeña de un medio. La galería solo pide de estas."""
+    pedida = os.path.normpath(os.path.join(str(BORRADORES), ruta))
+    if not pedida.startswith(str(BORRADORES) + os.sep):
+        raise HTTPException(404, "No existe")
+    pequeña = miniaturas.mini(Path(pedida))
+    if pequeña is None:
+        raise HTTPException(404, "No se pudo generar")
+    return FileResponse(pequeña, headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/borradores/{ruta:path}")
 def medio_local(ruta: str):
-    destino = (BORRADORES / ruta).resolve()
-    if BORRADORES.resolve() not in destino.parents or not destino.exists():
+    """Sirve un medio de la galería, siga o no un enlace simbólico.
+
+    Lo importado de Divi son enlaces a los originales, así que aquí no se puede
+    resolver la ruta antes de comprobarla: `resolve()` saltaría al destino real
+    —fuera de borradores/— y todo daría 404. Lo que se valida es la ruta
+    pedida, normalizada, que es por donde podría colarse un «..»; el enlace en
+    sí lo pone el importador, no quien navega.
+    """
+    pedida = os.path.normpath(os.path.join(str(BORRADORES), ruta))
+    if not pedida.startswith(str(BORRADORES) + os.sep):
+        raise HTTPException(404, "No existe")
+    destino = Path(pedida)
+    if not destino.is_file():
         raise HTTPException(404, "No existe")
     return FileResponse(destino)
 
@@ -305,6 +372,22 @@ def raiz():
 
 
 app.mount("/estatico", StaticFiles(directory=ESTATICO), name="estatico")
+
+
+def _calentar_miniaturas() -> None:
+    """Deja hechas las miniaturas que falten, sin bloquear el arranque.
+
+    Vale la pena hacerlo aquí: la primera vez son cien ffmpeg y, si se hicieran
+    a demanda, la galería tardaría en pintarse justo el día que la estrenas.
+    """
+    hechas = 0
+    for pieza in generador.borradores_en_disco():
+        for medio in pieza["medios"]:
+            if miniaturas.mini(BORRADORES / medio):
+                hechas += 1
+    if hechas:
+        print(f"  {hechas} miniaturas listas")
+        tocado()
 
 
 def _vigilar_github() -> None:
@@ -319,6 +402,11 @@ def _vigilar_github() -> None:
 if __name__ == "__main__":
     import uvicorn
 
+    # El 8787 de siempre, salvo que alguien pida otro: sirve para levantar una
+    # segunda copia sin pelearse con la que ya está abierta.
+    puerto = int(os.environ.get("PANEL_PUERTO", "8787"))
+
     threading.Thread(target=_vigilar_github, daemon=True).start()
-    print("\n  Dashboard en  →  http://127.0.0.1:8787\n")
-    uvicorn.run(app, host="127.0.0.1", port=8787, log_level="warning")
+    threading.Thread(target=_calentar_miniaturas, daemon=True).start()
+    print(f"\n  Dashboard en  →  http://127.0.0.1:{puerto}\n")
+    uvicorn.run(app, host="127.0.0.1", port=puerto, log_level="warning")

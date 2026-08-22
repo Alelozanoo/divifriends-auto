@@ -24,6 +24,9 @@ programarlas—: ver [`dashboard/`](dashboard/README.md).
 ./ver-calendario
 ```
 
+O **«Panel de Instagram»**, la app del Escritorio: hace lo mismo —arranca el
+servidor si no está y abre el navegador— sin pasar por la terminal.
+
 La API de Instagram **no tiene programación nativa** —el `scheduled_publish_time`
 es solo de Páginas de Facebook—, así que el calendario lo lleva la cola y el
 cron. Y Meta descarga los medios desde una URL, no acepta archivos locales:
@@ -116,7 +119,7 @@ Vale cualquier almacén compatible con S3. Por defecto, **Backblaze B2**
 ## 4. Instalar
 
 ```bash
-cd ~/ig-autopost && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cd ~/Developer/ig-autopost && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 Copia `.env.example` a `.env` y rellénalo.

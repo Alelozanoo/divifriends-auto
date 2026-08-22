@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -193,7 +194,18 @@ def _sin_subir() -> int:
     return int(salida) if salida.isdigit() else 0
 
 
+# El panel pregunta por el estado en cada latido; lanzar un `git rev-list` por
+# segundo para un número que casi nunca cambia no compensa.
+_ULTIMO_CONTEO = 0.0
+CADUCA = 5.0
+
+
 def refrescar_estado() -> Estado:
+    global _ULTIMO_CONTEO
+    ahora = time.monotonic()
+    if ahora - _ULTIMO_CONTEO < CADUCA:
+        return ESTADO
     with _CERROJO:
+        _ULTIMO_CONTEO = ahora
         ESTADO.pendiente_de_subir = _sin_subir()
     return ESTADO

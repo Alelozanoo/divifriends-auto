@@ -200,7 +200,14 @@ def caja_carrusel(archivos: list[Path]) -> CAJA:
 
 
 def preparar_medio(origen: Path, tipo: str, caja: CAJA | None = None) -> Path:
-    salida = CACHE / origen.relative_to(POSTS).parent
+    # El origen no siempre cuelga de posts/: el panel programa piezas que están
+    # en borradores/. Lo único que se busca aquí es un sitio propio dentro de
+    # la caché, así que basta con la carpeta que contiene el archivo.
+    try:
+        rama = origen.relative_to(POSTS).parent
+    except ValueError:
+        rama = Path(origen.parent.name)
+    salida = CACHE / rama
     if origen.suffix.lower() in IMAGENES:
         return normalizar_imagen(origen, salida / f"{origen.stem}.jpg", tipo, caja)
 

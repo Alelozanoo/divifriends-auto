@@ -21,10 +21,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
+
+import favoritos
+import miniaturas
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +48,47 @@ PERMISOS = os.environ.get("GENERADOR_PERMISOS", "acceptEdits")
 
 FOTO, VIDEO = "post", "anim"
 
+# Claude Code no dice por dónde va, así que el avance se deduce de lo que hace:
+# cada fase tiene un suelo y un techo, y dentro de una fase la barra sigue
+# subiendo despacio con el reloj para que no parezca colgada. Nunca llega al
+# 100 % por su cuenta: el 100 es haber dejado la pieza en su carpeta.
+#
+#   (peso mínimo, techo, etiqueta)
+FASES = {
+    "arranque":   (2, 10, "arrancando"),
+    "skill":     (10, 24, "leyendo la skill"),
+    "componer":  (24, 52, "componiendo la pieza"),
+    "render":    (52, 80, "renderizando"),
+    "revisar":   (80, 90, "revisando el resultado"),
+    "entregar":  (90, 97, "dejándolo en borradores"),
+}
+
+# Cada cuántos segundos sube un punto mientras no cambie la fase.
+RITMO = 4.0
+
+_RENDER = ("ffmpeg", "shoot-reel", "node ", "playwright", "render", "capturar",
+           "convert", "sips", "ffprobe")
+_COMPONER = (".html", ".py", ".js", ".mjs", ".css", ".txt", ".json", ".svg")
+_MEDIOS = (".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov")
+
+
+def _fase_de(herramienta: str, detalle: str) -> str | None:
+    """Qué está haciendo Claude, a ojo de lo que toca."""
+    d = detalle.lower()
+    if "borradores/" in d:
+        return "entregar"
+    if herramienta == "Skill" or "/skills/" in d or "referencias/" in d:
+        return "skill"
+    if herramienta == "Bash" and any(x in d for x in _RENDER):
+        return "render"
+    if herramienta in ("Write", "Edit", "NotebookEdit"):
+        return "render" if d.endswith(_MEDIOS) else "componer"
+    if herramienta == "Read":
+        return "revisar" if d.endswith(_MEDIOS) else "skill"
+    if herramienta == "Bash":
+        return "componer"
+    return None
+
 
 def cli() -> str | None:
     """Dónde está el ejecutable de Claude Code, si es que está."""
@@ -58,16 +104,55 @@ def cli() -> str | None:
     return None
 
 
+_AUDIO_SABIDO: dict[tuple, bool] = {}
+
+
 def tiene_audio(ruta: Path) -> bool:
-    """Si el vídeo lleva pista de sonido. Sin ffprobe, se asume que no."""
+    """Si el vídeo lleva pista de sonido. Sin ffprobe, se asume que no.
+
+    La respuesta se guarda por archivo: el panel relee los borradores en cada
+    latido, y arrancar un ffprobe por vídeo y por segundo mientras Claude
+    trabaja se nota en el ventilador.
+    """
     if not shutil.which("ffprobe"):
         return False
+    try:
+        st = ruta.stat()
+    except OSError:
+        return False
+    marca = (str(ruta), st.st_mtime_ns, st.st_size)
+    if marca in _AUDIO_SABIDO:
+        return _AUDIO_SABIDO[marca]
+    # stdin cerrado: ffprobe lo lee si se lo dejas y se queda colgado.
     r = subprocess.run(
         ["ffprobe", "-v", "quiet", "-select_streams", "a", "-show_entries",
          "stream=codec_type", "-of", "csv=p=0", str(ruta)],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL,
     )
-    return "audio" in r.stdout
+    _AUDIO_SABIDO[marca] = "audio" in r.stdout
+    return _AUDIO_SABIDO[marca]
+
+
+# Lo que dice Claude Code cuando el modo de permisos le corta las manos. Sin
+# esto, una generación bloqueada acababa en «terminó sin dejar ninguna pieza»,
+# que es verdad pero no dice nada de por qué.
+# Quedarse sin cuota a mitad de un encargo sale por aquí, y sin esto acababa
+# en «Claude salió con código 1 y sin dejar nada»: verdad, pero te deja
+# buscando un fallo que no existe.
+SEÑAS_DE_CUOTA = (
+    "session limit",
+    "usage limit",
+    "rate limit",
+    "límite de uso",
+)
+
+SEÑAS_DE_BLOQUEO = (
+    "requested permissions",
+    "haven't granted it yet",
+    "bloqueada por permisos",
+    "permission denied by",
+    "no tengo permiso",
+)
 
 
 @dataclass
@@ -83,6 +168,35 @@ class Generacion:
     empezada: str = ""
     error: str = ""
     rehace: str = ""                   # id de la pieza que viene a sustituir
+    fase: str = "arranque"
+    bloqueada: bool = False            # a Claude le faltaron permisos
+    sin_cuota: str = ""                # se acabó el plan a mitad
+    suelo: int = 2                     # progreso al entrar en la fase
+    desde: float = field(default_factory=time.monotonic)
+
+    def entrar_en(self, fase: str) -> None:
+        """Solo se avanza: si Claude vuelve a leer algo, la barra no retrocede."""
+        if fase not in FASES or FASES[fase][0] < FASES[self.fase][0]:
+            return
+        if fase == self.fase:
+            return
+        self.suelo = max(self.progreso, FASES[fase][0])
+        self.fase = fase
+        self.desde = time.monotonic()
+
+    @property
+    def progreso(self) -> int:
+        if self.estado == "hecho":
+            return 100
+        if self.estado == "error":
+            return 0
+        _, techo, _ = FASES[self.fase]
+        andado = int((time.monotonic() - self.desde) / RITMO)
+        return max(0, min(techo, self.suelo + andado))
+
+    @property
+    def etiqueta(self) -> str:
+        return FASES[self.fase][2]
 
     @property
     def carpeta(self) -> Path:
@@ -176,6 +290,9 @@ def _leer_piezas(job: str, cuenta_slug: str = "") -> list[dict]:
 
         tipo = ficha.get("tipo") or _adivinar_tipo(medios)
         es_video = medios[0].suffix.lower() in VIDEOS
+        # El aspecto va en los datos para que la carta reserve su hueco antes
+        # de que llegue la imagen: si no, la galería baila mientras carga.
+        ancho, alto = miniaturas.medidas(medios[0])
         piezas.append({
             "id": f"{job}/{sub.name}",
             "cuenta": encargo.get("cuenta") or cuenta_slug,
@@ -187,6 +304,7 @@ def _leer_piezas(job: str, cuenta_slug: str = "") -> list[dict]:
             "medios": [str(m.relative_to(BORRADORES)) for m in medios],
             "es_video": es_video,
             "con_audio": es_video and tiene_audio(medios[0]),
+            "ancho": ancho, "alto": alto,
         })
     return piezas
 
@@ -197,24 +315,62 @@ def _adivinar_tipo(medios: list[Path]) -> str:
     return "REELS" if medios[0].suffix.lower() in VIDEOS else "IMAGE"
 
 
+# Leer la galería entera cuesta unos milisegundos por pieza —abrir su ficha,
+# su caption, medir el archivo—, y el panel la pide en cada latido. Se guarda
+# el resultado y se comprueba con una huella de fechas, que es un puñado de
+# scandir y no depende de cuántas piezas haya dentro.
+_GALERIA: tuple[tuple, list[dict]] | None = None
+
+
+def _huella() -> tuple:
+    if not BORRADORES.exists():
+        return ()
+    marcas = []
+    for job in sorted(BORRADORES.iterdir()):
+        if not job.is_dir() or job.name.startswith("."):
+            continue
+        try:
+            marcas.append((job.name, job.stat().st_mtime_ns))
+            marcas.extend((f"{job.name}/{p.name}", p.stat().st_mtime_ns)
+                          for p in sorted(job.iterdir()) if p.is_dir())
+        except OSError:
+            continue
+    return tuple(marcas)
+
+
 def borradores_en_disco(cuenta_slug: str | None = None) -> list[dict]:
     """Todo lo generado que sigue sin programar, también de sesiones pasadas."""
-    piezas = []
+    global _GALERIA
     if not BORRADORES.exists():
-        return piezas
-    for carpeta in sorted(BORRADORES.iterdir(), reverse=True):
-        if not carpeta.is_dir():
-            continue
-        slug = carpeta.name.rsplit("-", 3)[0]
-        if cuenta_slug and slug != cuenta_slug:
-            continue
-        piezas.extend(_leer_piezas(carpeta.name, slug))
-    return piezas
+        return []
+
+    huella = _huella()
+    if _GALERIA is None or _GALERIA[0] != huella:
+        # Lo último primero: lo que acabas de generar tiene que abrir la
+        # galería, no quedar sepultado detrás de cien piezas del archivo.
+        jobs = [c for c in BORRADORES.iterdir()
+                if c.is_dir() and not c.name.startswith(".")]
+        jobs.sort(key=lambda c: c.stat().st_mtime, reverse=True)
+
+        piezas = []
+        for carpeta in jobs:
+            piezas.extend(_leer_piezas(carpeta.name, carpeta.name.rsplit("-", 3)[0]))
+        _GALERIA = (huella, piezas)
+
+    # El gusto se pega al vuelo, fuera de la caché: darle a un corazón no puede
+    # obligar a releer la galería entera, y la huella son fechas de carpetas
+    # que un favorito no toca.
+    gusto = favoritos.leer()
+    return [{**p, "favorito": gusto.get(p["id"], 0)} for p in _GALERIA[1]
+            if not cuenta_slug or p["cuenta"] == cuenta_slug]
 
 
 def una_pieza(pieza_id: str) -> dict | None:
     job = pieza_id.split("/")[0]
-    return next((p for p in _leer_piezas(job) if p["id"] == pieza_id), None)
+    pieza = next((p for p in _leer_piezas(job) if p["id"] == pieza_id), None)
+    if pieza is not None:
+        pieza["favorito"] = favoritos.nivel_de(pieza_id)
+    return pieza
 
 
 # --- ejecución ----------------------------------------------------------
@@ -249,19 +405,25 @@ def _correr(gen: Generacion, cuenta, contexto: str = "") -> None:
         return
 
     for linea in proc.stdout:
-        legible = _resumir(linea)
+        bajo = linea.lower()
+        if any(x in bajo for x in SEÑAS_DE_CUOTA):
+            gen.sin_cuota = _cuando_vuelve(linea)
+        if any(x in bajo for x in SEÑAS_DE_BLOQUEO):
+            gen.bloqueada = True
+        legible, fase = _resumir(linea)
+        if fase:
+            gen.entrar_en(fase)
         if legible:
             gen.lineas.append(legible)
             del gen.lineas[:-120]
+        if legible or fase:
             _avisar()
 
     proc.wait()
     gen.piezas = _leer_piezas(gen.id, gen.cuenta)
     if not gen.piezas:
         gen.estado = "error"
-        gen.error = (f"Claude salió con código {proc.returncode} y sin dejar nada"
-                     if proc.returncode else
-                     "Terminó sin dejar ninguna pieza en la carpeta de borradores")
+        gen.error = _por_que_nada(gen, cwd, proc.returncode)
     else:
         gen.estado = "hecho"
         # El rediseño solo se lleva por delante al anterior cuando hay recambio:
@@ -271,32 +433,68 @@ def _correr(gen: Generacion, cuenta, contexto: str = "") -> None:
     _avisar()
 
 
-def _resumir(linea: str) -> str:
-    """De la riada de stream-json, solo lo que se entiende de un vistazo."""
+def _cuando_vuelve(linea: str) -> str:
+    """La hora de reseteo que Claude Code mete en el aviso, si viene."""
+    hallado = re.search(r"resets?\s+([0-9]{1,2}[:.][0-9]{2}\s*(?:am|pm)?)", linea, re.I)
+    return hallado.group(1).strip() if hallado else ""
+
+
+def _por_que_nada(gen: Generacion, cwd: Path, codigo: int) -> str:
+    """Explicar una generación vacía mirando qué se quedó a medias."""
+    if gen.sin_cuota:
+        return (f"Se acabó la cuota de tu plan de Claude a mitad del encargo. "
+                f"Vuelve a intentarlo a partir de las {gen.sin_cuota}.")
+    if gen.bloqueada or PERMISOS != "bypassPermissions":
+        return (
+            "Claude no ha podido ejecutar nada: con GENERADOR_PERMISOS="
+            f"«{PERMISOS}» puede escribir archivos, pero no lanzar los comandos "
+            "que componen la imagen o el reel, ni leer las referencias de la "
+            "skill, ni escribir fuera de la carpeta del proyecto. Pon "
+            "GENERADOR_PERMISOS=bypassPermissions en el .env y reinicia el panel."
+        )
+
+    # A veces la pieza existe pero se quedó en la carpeta de trabajo.
+    rastros = sorted(cwd.glob(f"**/*{gen.id}*"))
+    if rastros:
+        return (f"Terminó sin dejar la pieza en borradores/, pero hay trabajo "
+                f"suyo en {rastros[0].parent}. Míralo antes de repetir el encargo.")
+
+    if codigo:
+        return f"Claude salió con código {codigo} y sin dejar nada"
+    return "Terminó sin dejar ninguna pieza en la carpeta de borradores"
+
+
+def _resumir(linea: str) -> tuple[str, str | None]:
+    """De la riada de stream-json: la línea legible y en qué fase va.
+
+    Devuelve (texto para la consola, fase deducida o None).
+    """
     linea = linea.strip()
     if not linea:
-        return ""
+        return "", None
     if not linea.startswith("{"):
-        return linea[:200]
+        return linea[:200], None
     try:
         ev = json.loads(linea)
     except json.JSONDecodeError:
-        return ""
+        return "", None
 
     if ev.get("type") == "assistant":
         for bloque in ev.get("message", {}).get("content", []):
             if bloque.get("type") == "text" and bloque.get("text", "").strip():
-                return bloque["text"].strip()[:300]
+                return bloque["text"].strip()[:300], None
             if bloque.get("type") == "tool_use":
                 nombre = bloque.get("name", "")
                 entrada = bloque.get("input", {})
-                detalle = (entrada.get("file_path") or entrada.get("description")
-                           or entrada.get("command") or entrada.get("skill") or "")
-                return f"· {nombre} {str(detalle)[:120]}".strip()
+                detalle = str(entrada.get("file_path") or entrada.get("command")
+                              or entrada.get("skill") or entrada.get("description")
+                              or "")
+                return (f"· {nombre} {detalle[:120]}".strip(),
+                        _fase_de(nombre, detalle))
     if ev.get("type") == "result":
         coste = ev.get("total_cost_usd")
-        return f"— terminado{f' ({coste:.2f} $)' if coste else ''}"
-    return ""
+        return f"— terminado{f' ({coste:.2f} $)' if coste else ''}", "entregar"
+    return "", None
 
 
 def _nuevo_id(slug: str) -> str:
@@ -365,13 +563,114 @@ def rehacer(cuenta, pieza_id: str, instruccion: str, entero: bool,
     return gen
 
 
-def descartar(pieza_id: str) -> None:
+# Carpetas que jamás se borran enteras aunque el rastro apunte a ellas: son
+# almacenes con trabajo de otras piezas dentro, no la carpeta de un post.
+INTOCABLES = {
+    Path.home(), Path.home() / "Desktop", Path.home() / "Documents",
+    Path.home() / "Downloads", Path.home() / "Movies", Path.home() / "Pictures",
+    Path.home() / "Desktop" / "Divi",
+    Path.home() / "Desktop" / "Divi" / "Reels",
+    Path.home() / "Desktop" / "Divi" / "Piezas",
+    RAIZ, RAIZ / "posts", BORRADORES,
+}
+
+
+def _carpeta_suya(original: Path, nombre_pieza: str) -> bool:
+    """¿La carpeta donde vive el original es de esta pieza y de nadie más?
+
+    Un reel importado de Divi/Reels/45-tres-cosas/ entra en la galería con ese
+    mismo nombre: la carpeta es suya entera —el html, el audio, los montajes—
+    y borrar solo el mp4 dejaría la chatarra. Una imagen de «Piezas/Instagram
+    que me gustan/» comparte carpeta con otras cincuenta: ahí se va el archivo
+    y nada más.
+    """
+    carpeta = original.parent
+    if carpeta in INTOCABLES or carpeta == Path(carpeta.anchor):
+        return False
+    if len(carpeta.parts) <= len(Path.home().parts) + 1:
+        return False
+    if carpeta in RAIZ.parents or carpeta == RAIZ:
+        return False
+    return carpeta.name == nombre_pieza
+
+
+def rastro_de(pieza_id: str) -> list[str]:
+    """Qué queda en el Mac detrás de una pieza, fuera de borradores/.
+
+    Lo importado de Divi son enlaces simbólicos: la carpeta del borrador es un
+    puñado de atajos y el vídeo de verdad sigue en su sitio. Esto devuelve ese
+    sitio, para poder enseñarlo antes de borrar y para poder llevárselo.
+    """
+    carpeta = (BORRADORES / pieza_id).resolve()
+    if BORRADORES.resolve() not in carpeta.parents or not carpeta.is_dir():
+        return []
+
+    fuera: list[Path] = []
+    for hijo in sorted(carpeta.iterdir()):
+        if not hijo.is_symlink():
+            continue                      # lo generado aquí ya se va con la carpeta
+        try:
+            original = hijo.resolve(strict=True)
+        except OSError:
+            continue                      # enlace roto: el original ya no está
+        if BORRADORES.resolve() in original.parents:
+            continue
+        if _carpeta_suya(original, carpeta.name):
+            fuera.append(original.parent)
+        else:
+            fuera.append(original)
+            # El .txt hermano es el caption de ese post, no de otro.
+            hermano = original.with_suffix(".txt")
+            if hermano.exists():
+                fuera.append(hermano)
+
+    vistos, limpio = set(), []
+    for ruta in fuera:
+        if ruta not in vistos and not any(p in vistos for p in ruta.parents):
+            vistos.add(ruta)
+            limpio.append(str(ruta))
+    return limpio
+
+
+def _a_la_papelera(ruta: Path) -> bool:
+    """Mover, no destruir: «borrar del Mac» tiene que poder deshacerse.
+
+    La Papelera de verdad, la de ~/.Trash, con un sufijo si ya hay algo con ese
+    nombre. Nada de rm -rf sobre carpetas de trabajo del Escritorio.
+    """
+    papelera = Path.home() / ".Trash"
+    try:
+        papelera.mkdir(exist_ok=True)
+        destino = papelera / ruta.name
+        n = 2
+        while destino.exists():
+            destino = papelera / f"{ruta.stem} {n}{ruta.suffix}"
+            n += 1
+        shutil.move(str(ruta), str(destino))
+        return True
+    except (OSError, shutil.Error):
+        return False
+
+
+def descartar(pieza_id: str, con_original: bool = False) -> list[str]:
+    """Se lleva la carpeta del borrador. Con `con_original`, también lo que
+    esa pieza tenga fuera: el reel entero de Divi se va a la Papelera."""
     destino = (BORRADORES / pieza_id).resolve()
     if BORRADORES.resolve() not in destino.parents:
         raise ValueError("ruta fuera de borradores/")
+
+    llevados = []
+    if con_original:
+        for ruta in rastro_de(pieza_id):
+            if _a_la_papelera(Path(ruta)):
+                llevados.append(ruta)
+
     shutil.rmtree(destino, ignore_errors=True)
+    favoritos.olvidar(pieza_id)
     # Si el job se queda sin piezas, se lleva también su encargo.
     job = destino.parent
     if job != BORRADORES.resolve() and job.exists():
         if not any(p.is_dir() for p in job.iterdir()):
             shutil.rmtree(job, ignore_errors=True)
+            favoritos.olvidar(job.name)
+    return llevados

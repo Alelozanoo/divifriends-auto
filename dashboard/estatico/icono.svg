@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Panel de publicación</title>
+  <!-- La placa lleva el chaflán de los paneles: arriba a la izquierda y abajo a la derecha -->
+  <path d="M11 0 H64 V53 L53 64 H0 V11 Z" fill="#0e1116"/>
+  <path d="M11 1 H63 V52.6 L52.6 63 H1 V11.4 Z" fill="none" stroke="#232c3b" stroke-width="2"/>
+  <!-- La hoja del calendario. La esquina de arriba, recta: con las dos
+       cortadas la silueta salía de tarjeta SIM y no de calendario -->
+  <path d="M13 14 H51 V47 L47 51 H13 Z" fill="#0a0c10" stroke="#d9a441" stroke-width="2.4" stroke-linejoin="round"/>
+  <!-- La banda encendida y su raya de separación -->
+  <path d="M13 14 H51 V23 H13 Z" fill="#d9a441"/>
+  <path d="M13 23 H51 V24.6 H13 Z" fill="#0a0c10"/>
+  <!-- Seis días y uno con post dentro -->
+  <g fill="#39445a">
+    <rect x="17.8" y="30.3" width="6.2" height="4.6"/>
+    <rect x="28.9" y="30.3" width="6.2" height="4.6"/>
+    <rect x="40" y="30.3" width="6.2" height="4.6"/>
+    <rect x="17.8" y="40.7" width="6.2" height="4.6"/>
+    <rect x="40" y="40.7" width="6.2" height="4.6"/>
+  </g>
+  <rect x="28.9" y="40.7" width="6.2" height="4.6" fill="#d9a441"/>
+</svg>
